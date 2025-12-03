@@ -22,14 +22,30 @@ export default function Home() {
     scrollToBottom()
   }, [messages])
 
+  const updateLastAssistantMessage = (newContent) => {
+    setMessages((messages) => {
+      if (!messages.length) return messages
+      const updated = [...messages]
+      const lastIndex = updated.length - 1
+
+      if (updated[lastIndex]?.role === 'assistant') {
+        updated[lastIndex] = { ...updated[lastIndex], content: newContent }
+        return updated
+      }
+
+      return [...updated, { role: 'assistant', content: newContent }]
+    })
+  }
+
   const sendMessage = async () => {
-    if (!message.trim() || isLoading) return;
+    const trimmedMessage = message.trim()
+    if (!trimmedMessage || isLoading) return;
     setIsLoading(true)
 
     setMessage('')
     setMessages((messages) => [
       ...messages,
-      { role: 'user', content: message },
+      { role: 'user', content: trimmedMessage },
       { role: 'assistant', content: '' },
     ])
 
@@ -39,35 +55,49 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify([...messages, { role: 'user', content: message }]),
+        body: JSON.stringify([...messages, { role: 'user', content: trimmedMessage }]),
       })
 
       if (!response.ok) {
-        throw new Error('Network response was not ok')
+        const errorBody = await response.json().catch(() => null)
+        const errorMessage = errorBody?.error || 'Network response was not ok'
+        updateLastAssistantMessage(errorMessage)
+        return
+      }
+
+      if (!response.body) {
+        updateLastAssistantMessage('Streaming is not supported in this browser.')
+        return
       }
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
+      let receivedText = false
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
         const text = decoder.decode(value, { stream: true })
+        if (text) {
+          receivedText = true
+        }
         setMessages((messages) => {
           let lastMessage = messages[messages.length - 1]
           let otherMessages = messages.slice(0, messages.length - 1)
+          if (lastMessage?.role !== 'assistant') return messages
           return [
             ...otherMessages,
             { ...lastMessage, content: lastMessage.content + text },
           ]
         })
       }
+
+      if (!receivedText) {
+        updateLastAssistantMessage("I'm sorry, I couldn't generate a response. Please try again.")
+      }
     } catch (error) {
       console.error('Error:', error)
-      setMessages((messages) => [
-        ...messages,
-        { role: 'assistant', content: "I'm sorry, but I encountered an error. Please try again later." },
-      ])
+      updateLastAssistantMessage("I'm sorry, but I encountered an error. Please try again later.")
     } finally {
       setIsLoading(false)
     }

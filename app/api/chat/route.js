@@ -1,4 +1,4 @@
-import {NextResponse} from "next/server"
+import { NextResponse } from "next/server"
 import OpenAI from "openai"
 
 const systemPrompt = `You are a knowledgeable and engaging soccer expert with a deep passion for the game. Your role is to discuss everything related to soccer, including:
@@ -19,35 +19,60 @@ const systemPrompt = `You are a knowledgeable and engaging soccer expert with a 
 
 Your tone is friendly, enthusiastic, and approachable, making the conversation enjoyable for everyone. Always promote a positive and inclusive atmosphere when discussing the beautiful game of soccer.`;
 
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+
 export async function POST(req) {
-    const openai = new OpenAI()
+  try {
     const data = await req.json()
 
-    // Create a chat completion request to the OpenAI API
+    if (!Array.isArray(data)) {
+      return NextResponse.json({ error: 'Invalid request payload.' }, { status: 400 })
+    }
+
+    const chatHistory = data
+      .filter((message) => message?.content?.trim())
+      // Drop the initial UI greeting so the model always starts with a user turn.
+      .filter((message, index) => !(index === 0 && message.role === 'assistant'))
+
+    if (chatHistory.length === 0) {
+      return NextResponse.json({ error: 'Message history is empty.' }, { status: 400 })
+    }
+
     const completion = await openai.chat.completions.create({
-        messages: [{role: 'system', content: systemPrompt}, ...data],
-        model: 'gpt-4o',
-        stream: true,
+      messages: [{ role: 'system', content: systemPrompt }, ...chatHistory],
+      model: 'gpt-4o',
+      stream: true,
     })
 
     const stream = new ReadableStream({
-        async start(controller) {
-            const encoder = new TextEncoder()
-            try {
-                for await (const chunk of completion) {
-                    const content = chunk.choices[0]?.delta?.content
-                    if (content) {
-                        const text = encoder.encode(content)
-                        controller.enqueue(text)
-                    }
-                }
-            } catch (err) {
-                controller.error(err)
-            } finally {
-                controller.close()
+      async start(controller) {
+        const encoder = new TextEncoder()
+        try {
+          for await (const chunk of completion) {
+            const content = chunk.choices[0]?.delta?.content
+            if (content) {
+              const text = encoder.encode(content)
+              controller.enqueue(text)
             }
-        },
+          }
+        } catch (err) {
+          controller.error(err)
+        } finally {
+          controller.close()
+        }
+      },
     })
 
-    return new NextResponse(stream)
+    return new NextResponse(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+      },
+    })
+  } catch (error) {
+    console.error('Chat route error:', error)
+    const message = error?.message || 'Failed to process chat request.'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 }
